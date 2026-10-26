@@ -1,0 +1,50 @@
+{
+  "name": "dsh-own-soul",
+  "version": "0.2.0",
+  "description": "自己的人格，自己长：可安装、可调试、能自己成长的 DSH 人格插件（纯规则 + 每晚 23:00 日记与离线蒸馏）",
+  "type": "module",
+  "license": "MIT",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.19",
+    "dsh": "0.2.1-rc.3"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "persona",
+    "personality",
+    "growth",
+    "soul"
+  ],
+  "files": [
+    "src",
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node test/smoke.mjs",
+    "check:client": "node test/client-check.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ],
+      "external": [
+        "react"
+      ]
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# dsh-own-soul bundle patch: 把这个插件插进 profile 的层栈。
+# 安装（pnpm 是 dsh plugin 的转发目标）：dsh plugin --profile <name> add dsh-own-soul
+- insert:
+    - id: dsh-own-soul
+      name: 'dsh-own-soul'
