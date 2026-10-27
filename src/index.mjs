@@ -6,6 +6,7 @@ import { distill } from './diary.mjs';
 import { buildMemory } from './inject.mjs';
 import { detect, keywords } from './rules.mjs';
 import { consolidate, extractMemories, memoryLine, searchMemories } from './memory.mjs';
+import { recentGroupReplay } from './group.mjs';
 
 export const name = 'dsh-own-soul';
 export const API = '/api/own-soul';
@@ -703,6 +704,26 @@ export function acquireSoul(ctx) {
         return { error: '不认识的 op：' + op };
       },
     },
+    {
+      name: 'soul_group_replay',
+      description:
+        '翻群聊前情：只读本地会话日志，把最近 N 分钟里「群友说了什么 + 我真发出去的回话」按时间排成剧本。群消息走旧桥接（没有 rpcId），dsh_im_group_history 在这台机器永远报无权，看群前情要用这个。不联网、不写文件。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          minutes: { type: 'number', description: '往回翻多少分钟，默认 60，最多 240' },
+          limit: { type: 'number', description: '最多返回多少条，默认 160，最多 400' },
+        },
+      },
+      output: {
+        schema: { type: 'object' },
+        render: (_args, value) => [{ type: 'text', text: typeof value?.text === 'string' ? value.text : JSON.stringify(value) }],
+      },
+      async execute(args) {
+        return { text: recentGroupReplay({ home, minutes: args?.minutes ?? 60, limit: args?.limit ?? 160 }) };
+      },
+    },
   ];
   const offTools = tools.map(tool => root.tools?.register?.(tool)).filter(Boolean);
 
@@ -814,6 +835,15 @@ export function acquireSoul(ctx) {
                 }),
                 stats: store.stats(),
               });
+              return;
+            }
+            if (route === '/group') {
+              const text = recentGroupReplay({
+                home,
+                minutes: url.searchParams.get('minutes') ?? 60,
+                limit: url.searchParams.get('limit') ?? 160,
+              });
+              send(res, 200, { text });
               return;
             }
             send(res, 404, { error: '接口不存在' });

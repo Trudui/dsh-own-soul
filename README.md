@@ -61,6 +61,7 @@ DSH 设置 → 左侧「自己」：
 - `soul_trait` —— 列出、添加、退休、恢复、删除特质
 - `soul_memory` —— 记忆：`list` / `search` / `add` / `update` / `drop`
 - `soul_session` —— 启用的对话：`current`（勾这个对话）/ `list` / `add <id>` / `remove <id>`
+- `soul_group_replay` —— 翻群聊前情：只读本地会话日志，把最近 N 分钟「群友说了什么 + 我真发出去的回话」排成剧本（`minutes` 默认 60，最多 240；`limit` 默认 160）。给 QQ 群场景用：群消息走旧桥接没有 rpcId，`dsh_im_group_history` 永远报无权，这个不需要任何 shell 权限
 
 ## 数据在哪
 

@@ -9,6 +9,7 @@ import { detect, keywords, normalizeRules } from '../src/rules.mjs';
 import { pairsOf, completedPairs } from '../src/capture.mjs';
 import { buildMemory, recallLines } from '../src/inject.mjs';
 import { consolidate, extractMemories, newEntry, searchMemories, strength } from '../src/memory.mjs';
+import { cleanGroupText, sentPart, replayRows, recentGroupReplay } from '../src/group.mjs';
 
 let failures = 0;
 const check = (name, ok, extra = '') => {
@@ -219,6 +220,30 @@ try {
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
+
+// —— 群聊回放：只读本地日志，把桥接包装和自己回声都排掉 ——
+check('群消息的桥接包装被剥掉', (() => {
+  const raw = 'zddd（751096148）：@你\n\n（这台机器只把正文里 `[QQ]…[/QQ]` 中间那段发到 QQ —— 想让手机收到的就写在里面；块外的话只在本机看，不会发出去。）';
+  return cleanGroupText(raw) === 'zddd（751096148）：@你';
+})());
+check('只有 [QQ] 之间那算真发出去的', (() => {
+  const raw = '我说点什么\n[QQ]群里那句\n第二行[/QQ]\n块外的话';
+  return sentPart(raw) === '群里那句 第二行' && sentPart('没有标记就没有') === '';
+})());
+check('回放会滤掉自己消息被回灌的那份', (() => {
+  const events = [
+    { type: 'user/message', time: 1000, data: { source: { kind: 'qq' }, content: [{ type: 'text', text: '三三（2725467994）：康神开播了' }] } },
+    { type: 'assistant/message', time: 2000, data: { message: { content: [{ type: 'text', text: '[QQ]不认识这人[/QQ]' }] } } },
+    { type: 'user/message', time: 3000, data: { source: { kind: 'qq' }, content: [{ type: 'text', text: '鱼露（1435065373）：不认识这人' }] } },
+    { type: 'user/message', time: 4000, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '网页端打的字' }] } },
+  ];
+  const rows = replayRows(events, { selfQQ: '1435065373' });
+  return rows.length === 2 && rows[0].who.startsWith('三三') && rows[1].who === '我' && rows[1].text === '不认识这人';
+})());
+check('群聊回放拿不到会话时只回一句人话、不抛', (() => {
+  const text = recentGroupReplay({ home: join(dir, 'no-such-home') });
+  return typeof text === 'string' && text.length > 0;
+})());
 
 console.log(failures ? `\n${failures} 个失败` : '\n全过');
 process.exit(failures ? 1 : 0);
