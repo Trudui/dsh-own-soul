@@ -4,12 +4,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SoulStore, DEFAULT_SEED, profileKey, sessionOn, normalizeSessions, renderPersona } from '../src/store.mjs';
-import { distill, renderTraits } from '../src/diary.mjs';
+import { distill, renderTraits, BLOCK_RATIO, renderMemory } from '../src/diary.mjs';
 import { detect, keywords, normalizeRules } from '../src/rules.mjs';
 import { pairsOf, completedPairs } from '../src/capture.mjs';
-import { buildMemory, recallLines } from '../src/inject.mjs';
+import { buildMemory, recallLines, warmStart } from '../src/inject.mjs';
 import { consolidate, extractMemories, newEntry, searchMemories, strength } from '../src/memory.mjs';
 import { cleanGroupText, sentPart, replayRows, recentGroupReplay } from '../src/group.mjs';
+import { isUsable, makeCard, topicsOf } from '../src/handoff.mjs';
+import { eyesState, findKey, look, typeOf } from '../src/eyes.mjs';
 
 let failures = 0;
 const check = (name, ok, extra = '') => {
@@ -245,5 +247,81 @@ check('群聊回放拿不到会话时只回一句人话、不抛', (() => {
   return typeof text === 'string' && text.length > 0;
 })());
 
+// —— 注入硬预算（2026-10-28）——
+const box = mkdtempSync(join(tmpdir(), 'own-soul-b-'));
+const store2 = new SoulStore(join(box, 'own-soul'));
+check('每块都有预算占比，加起来不超过 1', (() => {
+  const sum = Object.values(BLOCK_RATIO).reduce((a, b) => a + b, 0);
+  return Math.abs(sum - 1) < 0.001;
+})());
+check('塞满也绝不超过总预算', (() => {
+  const long = Array.from({ length: 60 }, (_, i) => `第${i}条很长的记忆内容，用来把预算撑爆试试看效果怎么样`);
+  const text = renderMemory({
+    handoff: '交接'.repeat(300),
+    traits: Array.from({ length: 20 }, (_, i) => ({ id: 't' + i, text: '特质'.repeat(30), status: 'active', salience: 1, evidence: ['他说的原话'] })),
+    facts: long,
+    recent: long,
+    recall: long,
+    budget: 1200,
+  });
+  return text.length <= 1200 + 120; // 算上包裹标签
+})());
+check('预算小的对话只留最重要的那几条', (() => {
+  const facts = ['一', '二', '三'].map((n, i) => `${n}${'字'.repeat(50)}`);
+  const text = renderMemory({ facts, recent: ['最近这句很长'.repeat(10)], budget: 300 });
+  return text.includes('我记得的事') && text.length < 400;
+})());
+
+// —— 接续卡 ——
+check('接续卡能写出"在做什么/卡在哪"', (() => {
+  const records = [
+    { sid: 's1', user: 'own-soul 的注入要加硬预算', assistant: '好，我按比例切块' },
+    { sid: 's1', user: '顺便把眼睛也整合进 own-soul', assistant: '行，我加个 soul_see' },
+    { sid: 's1', user: '那条接续卡也做了吧', assistant: '正在写' },
+  ];
+  const card = makeCard({ records, date: '2026-10-28', at: Date.now() });
+  return card.text.includes('在做什么') && card.text.includes('卡在哪') && card.text.length <= 800 && card.from.count === 3;
+})());
+check('3 天内的卡算可用，老卡不算', (() => {
+  const fresh = { at: Date.now() - 1000, text: 'x' };
+  const old = { at: Date.now() - 4 * 24 * 3600 * 1000, text: 'x' };
+  const empty = { at: Date.now(), text: '   ' };
+  return isUsable(fresh) && !isUsable(old) && !isUsable(empty) && !isUsable(null);
+})());
+check('新会话（还没聊开）才拿接续卡温启动', (() => {
+  const fresh = { sid: 'n', user: '新会话第一句', assistant: '', time: 1 };
+  const session = { events: [{ type: 'user/message', seq: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '接着干' }] } }] };
+  store2.writeHandoff({ at: Date.now(), date: '2026-10-28', text: '上次的交接内容', from: { count: 1, sessions: 1 } });
+  const warm = warmStart(store2, session);
+  const busy = warmStart(store2, { events: Array.from({ length: 12 }, (_, i) => ({ type: 'user/message', seq: i, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '第' + i }] } , time: i }) ) });
+  return warm === '上次的交接内容' && busy === '' && fresh.user === '新会话第一句';
+})());
+check('接续卡落盘能读回来', (() => {
+  const card = makeCard({ records: [{ sid: 's', user: '写一张卡', assistant: '好' }], date: '2026-10-28' });
+  store2.writeHandoff(card);
+  const back = store2.handoff();
+  return back && back.text === card.text && store2.handoffDates().length >= 1;
+})());
+
+// —— 眼睛 ——
+check('按文件头能认出 png/jpeg/gif/webp', (() => {
+  const png = typeOf(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]));
+  const jpg = typeOf(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]));
+  const gif = typeOf(Buffer.from('GIF89a______', 'latin1'));
+  const webp = typeOf(Buffer.concat([Buffer.from('RIFF'), Buffer.from([0, 0, 0, 0]), Buffer.from('WEBP'), Buffer.alloc(4)]));
+  return png?.ext === 'png' && jpg?.ext === 'jpg' && gif?.ext === 'gif' && webp?.ext === 'webp';
+})());
+check('眼睛状态能报出来', (() => {
+  const state = eyesState(box);
+  return typeof state.ready === 'boolean' && typeof state.source === 'string' && state.model === 'glm-4v-flash' && typeof findKey(box).key === 'string';
+})());
+const missLook = await look({ home: box, file: join(box, 'nope.png') });
+const blankLook = await look({ home: box });
+check('图不存在时只说人话、不抛', missLook.ok === false && typeof missLook.error === 'string' && blankLook.ok === false && typeof blankLook.error === 'string');
+const asyncChecks = await Promise.all([(async () => (await look({ home: box, file: join(box, 'x.png') })).ok === false)()]);
+check('look 永远不抛', asyncChecks.every(Boolean));
+
 console.log(failures ? `\n${failures} 个失败` : '\n全过');
 process.exit(failures ? 1 : 0);
+
+rmSync(box, { recursive: true, force: true });

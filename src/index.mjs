@@ -7,6 +7,8 @@ import { buildMemory } from './inject.mjs';
 import { detect, keywords } from './rules.mjs';
 import { consolidate, extractMemories, memoryLine, searchMemories } from './memory.mjs';
 import { recentGroupReplay } from './group.mjs';
+import { eyesState, look } from './eyes.mjs';
+import { isUsable, makeCard } from './handoff.mjs';
 
 export const name = 'dsh-own-soul';
 export const API = '/api/own-soul';
@@ -474,6 +476,25 @@ export function acquireSoul(ctx) {
     return count;
   };
 
+  // 会话长到一定规模就先写一张交接卡：新会话第一轮捞出来温启动。
+  // 只在"还没卡过 / 距上次超过半小时"时写，避免每轮都覆盖。
+  const CARD_AFTER_PAIRS = 24;
+  const CARD_GAP_MS = 30 * 60 * 1000;
+  const maybeHandoff = session => {
+    const state = store.state();
+    if (!sessionOn(state, session.id)) return '';
+    const pairs = pairsOf(session);
+    if (pairs.length < CARD_AFTER_PAIRS) return '';
+    const last = store.handoff();
+    if (isUsable(last) && Date.now() - Number(last.at ?? 0) < CARD_GAP_MS) return '';
+    const date = isoDate(new Date());
+    const records = pairs.slice(-12).map(pair => ({ sid: session.id, user: pair.user, assistant: pair.assistant }));
+    const card = makeCard({ records, date, at: Date.now() });
+    store.writeHandoff(card);
+    debug('handoff written', pairs.length, card.text.length);
+    return card.text;
+  };
+
   const offEvent = root.on('session/event', (session, event) => {
     if (!session || !event || session.header?.origin === 'subagent') return;
     debug('event', event.type, session.id, event.seq ?? '-', textOf(event.data?.content ?? event.data?.message?.content).slice(0, 40));
@@ -520,6 +541,11 @@ export function acquireSoul(ctx) {
       } catch (error) {
         ctx.logger?.warn?.(`own-soul: 回填流水失败：${error.message}`);
       }
+      try {
+        maybeHandoff(session);
+      } catch (error) {
+        ctx.logger?.warn?.(`own-soul: 写接续卡失败：${error.message}`);
+      }
       if (assembly.sections?.some(section => section.name === 'dsh-own-soul:persona')) return assembly;
       const state = store.state();
       if (!sessionOn(state, session.id)) return assembly;
@@ -552,13 +578,15 @@ export function acquireSoul(ctx) {
         const state = store.state();
         const traits = store.traits();
         return {
-          code: 'r4',
+          code: 'r5',
           enabled: state.enabled,
           grow: state.grow,
           diaryTime: state.diaryTime,
           tokenBudget: state.tokenBudget,
           persona: state.persona,
           sessions: state.sessions ?? [],
+          eyes: eyesState(home),
+          handoff: store.handoff() ? { at: store.handoff().at, date: store.handoff().date } : null,
           traits: traits.map(item => ({ id: item.id, text: item.text, status: item.status, count: item.count, days: item.days.length })),
           ...store.stats(),
         };
@@ -724,6 +752,57 @@ export function acquireSoul(ctx) {
         return { text: recentGroupReplay({ home, minutes: args?.minutes ?? 60, limit: args?.limit ?? 160 }) };
       },
     },
+    {
+      name: 'soul_see',
+      description:
+        '看一眼图片：本机文件路径或 http 链接都行，走免费视觉模型（glm-4v-flash），只回来一段文字描述。截图、照片、别人发的图都可以看。不看视频。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          file: { type: 'string', description: '本机路径，如 D:/x/a.png' },
+          url: { type: 'string', description: 'http(s) 图片链接' },
+          question: { type: 'string', description: '想让我重点看什么，可选' },
+        },
+      },
+      output: {
+        schema: { type: 'object' },
+        render: (_args, value) => [{ type: 'text', text: value?.ok ? String(value.text) : `看不了：${value?.error ?? '未知原因'}` }],
+      },
+      async execute(args) {
+        return look({ file: args?.file, url: args?.url, question: args?.question, home });
+      },
+    },
+    {
+      name: 'soul_handoff',
+      description:
+        '接续卡：op=read 看最新一张（上次干到哪了）；op=write 现在这一刻写一张交接条（新会话会据此温启动）。只记事情本身，不记情绪。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['op'],
+        properties: {
+          op: { type: 'string', enum: ['read', 'write'] },
+        },
+      },
+      output: {
+        schema: { type: 'object' },
+        render: (_args, value) => [{ type: 'text', text: typeof value?.text === 'string' ? value.text : JSON.stringify(value) }],
+      },
+      async execute(args, exec) {
+        if (args?.op === 'write') {
+          const session = exec?.agent?.session;
+          const pairs = session ? pairsOf(session) : [];
+          const date = isoDate(new Date());
+          const records = pairs.slice(-12).map(pair => ({ sid: session?.id, user: pair.user, assistant: pair.assistant }));
+          const card = makeCard({ records: records.length ? records : store.journal(date).slice(-12), date, at: Date.now() });
+          store.writeHandoff(card);
+          return { ok: true, text: card.text, at: card.at };
+        }
+        const card = store.handoff();
+        return card ? { ...card, usable: isUsable(card) } : { text: '还没有交接卡', usable: false };
+      },
+    },
   ];
   const offTools = tools.map(tool => root.tools?.register?.(tool)).filter(Boolean);
 
@@ -844,6 +923,35 @@ export function acquireSoul(ctx) {
                 limit: url.searchParams.get('limit') ?? 160,
               });
               send(res, 200, { text });
+              return;
+            }
+            if (route === '/eyes') {
+              if (req.method === 'POST') {
+                const body = await readBody(req);
+                const got = await look({
+                  home,
+                  file: typeof body?.file === 'string' ? body.file : '',
+                  url: typeof body?.url === 'string' ? body.url : '',
+                  question: typeof body?.question === 'string' ? body.question : '',
+                });
+                send(res, 200, got);
+                return;
+              }
+              send(res, 200, eyesState(home));
+              return;
+            }
+            if (route === '/handoff') {
+              if (req.method === 'POST') {
+                const body = await readBody(req);
+                const date = isoDate(new Date());
+                const records = Array.isArray(body?.records) && body.records.length ? body.records : store.journal(date).slice(-12);
+                const card = makeCard({ records, date, at: Date.now() });
+                store.writeHandoff(card);
+                send(res, 200, { ok: true, ...card });
+                return;
+              }
+              const card = store.handoff();
+              send(res, 200, card ? { ...card, usable: isUsable(card) } : { text: '', usable: false });
               return;
             }
             send(res, 404, { error: '接口不存在' });

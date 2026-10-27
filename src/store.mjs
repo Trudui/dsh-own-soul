@@ -83,7 +83,8 @@ export function normalizeSessions(input) {
 
 export function sessionOn(state, sid) {
   if (!state || state.enabled === false || !sid) return false;
-  return (state.sessions ?? []).some(entry => entry.id === sid);
+  // `*` = 这个 profile 里所有对话都管（headless / 自动化用得上，面板不提供）
+  return (state.sessions ?? []).some(entry => entry.id === sid || entry.id === '*');
 }
 
 export function profileKey(profileDir) {
@@ -119,8 +120,10 @@ export class SoulStore {
     this.stateFile = join(dir, 'state.json');
     this.traitsFile = join(dir, 'traits.json');
     this.memoryFile = join(dir, 'memory.json');
+    this.handoffFile = join(dir, 'handoff.json');
     this.journalDir = join(dir, 'journal');
     this.diaryDir = join(dir, 'diary');
+    this.handoffDir = join(dir, 'handoff');
     this.snapshotDir = join(dir, 'snapshots');
   }
 
@@ -305,12 +308,38 @@ export class SoulStore {
     return countMemories(this.memories());
   }
 
+  /** 接续卡：最新一张（新会话温启动用）。 */
+  handoff() {
+    const saved = readJson(this.handoffFile, null);
+    return saved && typeof saved.text === 'string' ? saved : null;
+  }
+
+  /** 写一张接续卡：最新存 handoff.json，历史按时间留档。 */
+  writeHandoff(card) {
+    this.ensure();
+    mkdirSync(this.handoffDir, { recursive: true });
+    writeJsonAtomic(this.handoffFile, card);
+    const stamp = new Date(card.at ?? Date.now()).toISOString().replace(/[:.]/g, '-');
+    try {
+      writeFileSync(join(this.handoffDir, `${stamp}.md`), card.text, { mode: 0o600 });
+    } catch {}
+    return card;
+  }
+
+  handoffDates() {
+    if (!existsSync(this.handoffDir)) return [];
+    return readdirSync(this.handoffDir)
+      .filter(name => name.endsWith('.md'))
+      .sort()
+      .reverse();
+  }
+
   snapshot(label) {
     try {
       this.ensure();
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const file = join(this.snapshotDir, `${stamp}-${label}.json`);
-      writeJsonAtomic(file, { state: this.state(), traits: this.traits(), memories: this.memories() });
+      writeJsonAtomic(file, { state: this.state(), traits: this.traits(), memories: this.memories(), handoff: this.handoff() });
       const all = readdirSync(this.snapshotDir).filter(name => name.endsWith('.json')).sort();
       for (const name of all.slice(0, Math.max(0, all.length - 30))) {
         try {
@@ -325,6 +354,7 @@ export class SoulStore {
   stats() {
     const traits = this.traits();
     const dates = this.diaryDates();
+    const card = this.handoff();
     return {
       dir: this.dir,
       traits: traits.length,
@@ -333,6 +363,8 @@ export class SoulStore {
       diaryDays: dates.length,
       lastDiary: dates[0] ?? null,
       memories: this.memoryStats(),
+      handoffAt: card?.at ?? null,
+      handoffDate: card?.date ?? null,
     };
   }
 }

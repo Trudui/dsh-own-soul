@@ -1,6 +1,8 @@
 import { keywords } from './rules.mjs';
-import { renderMemory } from './diary.mjs';
+import { BLOCK_RATIO, renderMemory } from './diary.mjs';
 import { memoryLine, renderFacts, searchMemories } from './memory.mjs';
+import { isUsable } from './handoff.mjs';
+import { pairsOf } from './capture.mjs';
 
 /** 取一行能读懂的摘要：跳过标题/粗体/标签行。 */
 export function oneLine(text, limit = 70) {
@@ -50,18 +52,36 @@ export function buildMemory(store, session, state, onError) {
   try {
     const texts = textsOf(session);
     const items = store.memories();
-    const hot = pickFacts(items, texts, Math.max(3, Math.round((state.tokenBudget ?? 1200) / 200)));
+    const budget = Number(state.tokenBudget) || 1200;
+    const factCap = Math.floor(budget * BLOCK_RATIO.facts);
+    const hot = pickFacts(items, texts, Math.max(2, Math.round(factCap / 95)));
     const recalled = pickRecall(items, texts, hot);
     return renderMemory({
+      handoff: warmStart(store, session),
       traits: store.traits(),
       facts: hot.map(entry => memoryLine(entry, 90)),
       recent: recentLines(store, 3),
       recall: [...recallLines(store, texts, 2), ...recalled.map(entry => memoryLine(entry, 70))],
-      budget: state.tokenBudget,
+      budget,
       minSalience: state.minSalience ?? 0.15,
     });
   } catch (error) {
     onError?.(error);
+    return '';
+  }
+}
+
+/**
+ * 温启动：只有"这个会话几乎还没聊"（<=2 个问答对）时，才把 3 天内的接续卡拿出来。
+ * 聊开了就不再提，免得每轮都把旧交接顶在头上。
+ */
+export function warmStart(store, session) {
+  try {
+    const pairs = pairsOf(session);
+    if (pairs.length > 2) return '';
+    const card = store.handoff();
+    return isUsable(card) ? card.text : '';
+  } catch {
     return '';
   }
 }
