@@ -108,12 +108,14 @@ export function distill(date, { records = [], traits = [], state }) {
       };
       next.push(item);
     }
-    item.count += 1;
-    if (!item.days.includes(date)) item.days.push(date);
+    // 同一天重跑（比如当天晚上又补了一轮对话）不该重复加分，只按“天”计数。
+    const firstToday = !item.days.includes(date);
+    if (firstToday) item.count += 1;
+    if (firstToday) item.days.push(date);
     if (evidence && !item.evidence.includes(evidence)) item.evidence = [...item.evidence, evidence].slice(-3);
     item.lastSeen = date;
-    // 重要度：出现一次加一点，跨天重复加得更多；越近期越高
-    item.salience = Math.min(1, (item.salience ?? 0) + salience + (item.days.length > 1 ? 0.15 : 0));
+    // 重要度：出现一天加一点，跨天重复加得更多
+    if (firstToday) item.salience = Math.min(1, (item.salience ?? 0) + salience + (item.days.length > 1 ? 0.15 : 0));
     if (item.days.length >= 2) item.status = 'active';
     return item;
   };

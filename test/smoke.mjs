@@ -196,6 +196,26 @@ try {
     return out.length === 2 && out[0].text.includes('烛兑');
   })());
   check('stats 里有记忆统计', store.stats().memories.total >= 1);
+  check('日记覆盖条数能记下来（用来判断要不要补写）', (() => {
+    store.append('2026-05-01', { useq: '1', user: '先说一件事', assistant: '嗯' });
+    store.writeDiary('2026-05-01', '# 2026-05-01\n');
+    store.markDiaryCover('2026-05-01', 1);
+    const before = store.diaryCover()['2026-05-01'] === 1;
+    store.append('2026-05-01', { useq: '2', user: '再补一句', assistant: '好' });
+    const stale = store.diaryCover()['2026-05-01'] < store.journal('2026-05-01').length;
+    store.markDiaryCover('2026-05-01', 2);
+    return before && stale && store.diaryCover()['2026-05-01'] === 2;
+  })());
+  check('同一天重跑蒸馏不会给特质重复加分', (() => {
+    const records = [
+      { user: '不对，你搞错了，我说的是明天', assistant: '我重新看' },
+      { user: '记住了，以后先给结论', assistant: '行' },
+    ];
+    const first = distill('2026-06-01', { records, traits: [] , state: store.state() });
+    const second = distill('2026-06-01', { records, traits: first.traits, state: store.state() });
+    const pick = (list, kind) => list.find(item => item.kind === kind)?.count;
+    return first.traits.length > 0 && pick(first.traits, 'correction') === pick(second.traits, 'correction');
+  })());
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

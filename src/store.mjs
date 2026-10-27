@@ -216,6 +216,20 @@ export class SoulStore {
     return existsSync(file) ? readFileSync(file, 'utf8') : null;
   }
 
+  /** 每篇日记都覆盖到第几条流水（用来判断"当天后来又说话了，需要补写"）。 */
+  diaryCover() {
+    const saved = readJson(join(this.diaryDir, '_cover.json'), {});
+    return saved && typeof saved === 'object' ? saved : {};
+  }
+
+  markDiaryCover(date, count) {
+    const cover = this.diaryCover();
+    cover[date] = count;
+    this.ensure();
+    writeFileSync(join(this.diaryDir, '_cover.json'), JSON.stringify(cover, null, 2), { mode: 0o600 });
+    return cover;
+  }
+
   diaryDates() {
     if (!existsSync(this.diaryDir)) return [];
     return readdirSync(this.diaryDir)

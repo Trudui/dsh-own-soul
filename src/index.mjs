@@ -137,6 +137,7 @@ export function acquireSoul(ctx) {
     const result = distill(date, { records, traits: store.traits(), state });
     store.snapshot('before-diary');
     store.writeDiary(date, result.markdown);
+    store.markDiaryCover(date, records.length);
     store.writeTraits(result.traits);
     // 顺手把他说过的"以后 / 每次 / 别再 / 我喜欢"这类话记成结构化记忆
     const learned = harvest(records, state, date);
@@ -172,6 +173,16 @@ export function acquireSoul(ctx) {
     return added;
   };
 
+  /** 这天该不该（重新）写日记：过了日记时间、有流水、且流水比日记覆盖的多。 */
+  const needsDiary = (date, boundary) => {
+    const records = store.journal(date);
+    if (!records.length) return false;
+    if (new Date() < boundary) return false;
+    const covered = store.diaryCover()[date];
+    if (covered === undefined) return true;
+    return covered < records.length;
+  };
+
   const runMissed = () => {
     const state = store.state();
     if (!state.enabled || !state.grow) return;
@@ -181,26 +192,21 @@ export function acquireSoul(ctx) {
     const yesterday = new Date(now.getTime() - 86400000);
     for (const date of [isoDate(yesterday), isoDate(now)]) {
       const boundary = date === isoDate(now) ? due : new Date(due.getTime() - 86400000);
-      if (now >= boundary && !store.diary(date) && store.journal(date).length) runDiary(date);
+      if (needsDiary(date, boundary)) runDiary(date, { force: true });
     }
   };
 
+  // 不用长定时器：电脑睡一晚、系统把定时器丢了就永远不触发。
+  // 改成每分钟自检一次，过点且流水有新增就补写；重复写是幂等的。
   const schedule = () => {
-    if (timer) clearTimeout(timer);
-    const state = store.state();
-    if (!state.enabled || !state.grow) return;
-    const [hh, mm] = state.diaryTime.split(':').map(Number);
-    const now = new Date();
-    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-    timer = setTimeout(async () => {
+    if (timer) clearInterval(timer);
+    timer = setInterval(() => {
       try {
-        runDiary(isoDate(new Date()));
+        runMissed();
       } catch (error) {
         ctx.logger?.warn?.(`own-soul: 写日记失败：${error.message}`);
       }
-      schedule();
-    }, Math.min(next - now, 2 ** 31 - 1));
+    }, 60_000);
     timer.unref?.();
   };
 
