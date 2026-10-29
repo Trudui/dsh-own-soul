@@ -174,6 +174,7 @@ DSH 设置 → 左侧「自己」：
 - `soul_memory` —— 记忆：`list` / `search` / `add`（打架会返回 `conflict`，加 `force` 强制记） / `update` / `drop` / `pending`（看等裁决的） / `resolve`（`keep=new|old|both`）
 - `soul_session` —— 启用的对话：`current`（勾这个对话）/ `list` / `add <id>` / `remove <id>`
 - `soul_see` —— 用眼睛看一张图：本地路径或 http(s) 链接，可带一句 `question`，返回看到的描述；看不了只回一句原因
+- `soul_recall` —— 翻自己的流水原文：按关键词找「他当时怎么说的、我怎么答的」，返回日期 + 片段。上下文被折叠掉之后用它把细节捞回来（记忆库只有一句话摘要，这里拿得到原话）
 - `soul_handoff` —— 接续卡：`read` 读最新的、`write` 按当前流水写一张
 - `soul_group_replay` —— 翻群聊前情：只读本地会话日志，把最近 N 分钟「群友说了什么 + 我真发出去的回话」排成剧本（`minutes` 默认 60，最多 240；`limit` 默认 160）。给 QQ 群场景用：群消息走旧桥接没有 rpcId，`dsh_im_group_history` 永远报无权，这个不需要任何 shell 权限
 

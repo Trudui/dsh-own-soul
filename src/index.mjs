@@ -4,7 +4,7 @@ import { textOf, pairsOf } from './capture.mjs';
 import { SoulStore, isoDate, profileKey, renderPersona, sessionOn } from './store.mjs';
 import { distill } from './diary.mjs';
 import { buildMemory } from './inject.mjs';
-import { detect, keywords } from './rules.mjs';
+import { clip, detect, keywords } from './rules.mjs';
 import { consolidate, extractMemories, memoryLine, searchMemories } from './memory.mjs';
 import { recentGroupReplay } from './group.mjs';
 import { eyesState, look } from './eyes.mjs';
@@ -781,6 +781,58 @@ export function acquireSoul(ctx) {
       },
       async execute(args) {
         return { text: recentGroupReplay({ home, minutes: args?.minutes ?? 60, limit: args?.limit ?? 160 }) };
+      },
+    },
+    {
+      name: 'soul_recall',
+      description:
+        '翻自己的流水原文：按关键词去 journal 里找「他当时怎么说的、我怎么答的」，返回带日期和会话 id 的片段。上下文被折叠掉之后，用这个把细节捞回来（记忆库只有一句话摘要，这里能拿到原话）。不联网、不写文件。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          query: { type: 'string', description: '要找的词或句子，比如「接续卡」「打包」「群」' },
+          days: { type: 'number', description: '往回翻几天，默认 7' },
+          limit: { type: 'number', description: '最多几条，默认 10，最多 40' },
+        },
+        required: ['query'],
+      },
+      output: {
+        schema: { type: 'object' },
+        render: (_args, value) => [
+          { type: 'text', text: typeof value?.text === 'string' ? value.text : JSON.stringify(value) },
+        ],
+      },
+      async execute(args) {
+        const query = String(args?.query ?? '').trim();
+        if (!query) return { text: '要给我一个词，我才知道翻什么。' };
+        const days = Math.max(1, Math.min(60, Math.round(Number(args?.days) || 7)));
+        const limit = Math.max(1, Math.min(40, Math.round(Number(args?.limit) || 10)));
+        const words = query.split(/\s+/).filter(Boolean);
+        const dates = store.journalDates().slice(0, days);
+        const hits = [];
+        for (const date of dates) {
+          for (const record of store.journal(date)) {
+            const hay = `${record.user ?? ''}
+${record.assistant ?? ''}`;
+            const score = words.filter(word => hay.includes(word)).length;
+            if (!score) continue;
+            const user = clip(record.user ?? '', 120);
+            const dedupe = `${date} ${user}`;
+            if (hits.some(item => item.dedupe === dedupe)) continue;
+            hits.push({ date, score, dedupe, sid: record.sid ?? '', user, assistant: clip(record.assistant ?? '', 160) });
+          }
+        }
+        if (!hits.length) return { text: `最近 ${days} 天的流水里没找到「${query}」。` };
+        const picked = hits.sort((a, b) => b.score - a.score).slice(0, limit);
+        const lines = picked.map(
+          item => `[${item.date}] 他：${item.user || '（空）'}
+           我：${item.assistant || '（没回完）'}`,
+        );
+        return { text: `翻到 ${hits.length} 条，取最相关的 ${picked.length} 条（共翻了 ${dates.length} 天）：
+
+${lines.join('
+')}` };
       },
     },
     {
