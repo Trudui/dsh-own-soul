@@ -818,7 +818,7 @@ ${record.assistant ?? ''}`;
             const score = words.filter(word => hay.includes(word)).length;
             if (!score) continue;
             const user = clip(record.user ?? '', 120);
-            const dedupe = `${date} ${user}`;
+            const dedupe = `${date}\u0000${user}`;
             if (hits.some(item => item.dedupe === dedupe)) continue;
             hits.push({ date, score, dedupe, sid: record.sid ?? '', user, assistant: clip(record.assistant ?? '', 160) });
           }
