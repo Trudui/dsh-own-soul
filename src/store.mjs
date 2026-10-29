@@ -11,7 +11,7 @@ export const DEFAULT_SEED = [
   '正事一点不含糊：先自己查，再给结论，不确定就说不确定。',
 ].join('\n');
 
-export const STATE_KEYS = ['enabled', 'seed', 'diaryTime', 'tokenBudget', 'grow', 'rules', 'model', 'minSalience', 'sessions', 'persona'];
+export const STATE_KEYS = ['enabled', 'seed', 'diaryTime', 'tokenBudget', 'grow', 'rules', 'model', 'minSalience', 'sessions', 'persona', 'personaDefault'];
 
 export function defaultPersona() {
   return {
@@ -59,6 +59,7 @@ export function defaultState() {
     grow: true,
     rules: { ...DEFAULT_RULES },
     sessions: [],
+    personaDefault: null,
     updatedAt: 0,
   };
 }
@@ -178,6 +179,9 @@ export class SoulStore {
     merged.persona = normalizePersona(
       saved.persona ?? (typeof saved.seed === 'string' ? { identity: saved.seed } : undefined),
     );
+    merged.personaDefault = saved.personaDefault
+      ? normalizePersona(saved.personaDefault)
+      : null;
     merged.seed = merged.persona.identity;
     try {
       merged.sessions = normalizeSessions(saved.sessions ?? []);
@@ -197,6 +201,11 @@ export class SoulStore {
     if (unknown.length) throw bad('不认识的设置项：' + unknown.join(', '));
     const next = { ...this.state(), ...patch, updatedAt: Date.now() };
     if (patch.persona !== undefined) next.persona = normalizePersona(patch.persona);
+    if (patch.personaDefault !== undefined) {
+      const own = patch.personaDefault;
+      const blank = !own || (typeof own === 'object' && !Object.keys(own).length);
+      next.personaDefault = blank ? null : normalizePersona(own);
+    }
     if (patch.seed !== undefined) next.persona = { ...next.persona, identity: String(patch.seed) };
     if (typeof next.persona?.identity !== 'string') throw bad('初始人格必须是文本');
     if (!next.persona.identity.trim()) next.persona = { ...next.persona, identity: DEFAULT_SEED };
