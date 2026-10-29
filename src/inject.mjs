@@ -48,11 +48,27 @@ export function recallLines(store, texts, limit = 2) {
  * 组装注入用的整块"自我记忆"。
  * 出任何错都只返回空串 —— 这段是锦上添花，绝不能让整轮对话失败。
  */
+export const WARM_PAIRS = 2;
+export const WARM_RATIO = 1.7;
+export const WARM_MAX = 2000;
+
+export function isWarmSession(session) {
+  try {
+    return pairsOf(session).length <= WARM_PAIRS;
+  } catch {
+    return false;
+  }
+}
+
 export function buildMemory(store, session, state, onError) {
   try {
     const texts = textsOf(session);
     const items = store.memories();
-    const budget = Number(state.tokenBudget) || 1200;
+    const base = Number(state.tokenBudget) || 1200;
+    // 新会话头两轮：把预算放大一点，好让它"醒过来"时先认清自己是谁、之前在干嘛。
+    // 聊开之后立刻回落到正常预算，不然每轮都付这笔钱。
+    const warm = isWarmSession(session);
+    const budget = warm ? Math.min(WARM_MAX, Math.round(base * WARM_RATIO)) : base;
     const factCap = Math.floor(budget * BLOCK_RATIO.facts);
     const hot = pickFacts(items, texts, Math.max(2, Math.round(factCap / 95)));
     const pending = items.filter(entry => entry.status === 'pending').length;
@@ -61,8 +77,8 @@ export function buildMemory(store, session, state, onError) {
       handoff: warmStart(store, session),
       traits: store.traits(),
       facts: hot.map(entry => memoryLine(entry, 90)),
-      recent: recentLines(store, 3),
-      recall: [...recallLines(store, texts, 2), ...recalled.map(entry => memoryLine(entry, 70))],
+      recent: recentLines(store, warm ? 4 : 3),
+      recall: [...recallLines(store, texts, warm ? 3 : 2), ...recalled.map(entry => memoryLine(entry, 70))],
       pending,
       budget,
       minSalience: state.minSalience ?? 0.15,

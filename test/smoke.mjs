@@ -7,7 +7,7 @@ import { SoulStore, DEFAULT_SEED, profileKey, sessionOn, normalizeSessions, rend
 import { distill, renderTraits, BLOCK_RATIO, renderMemory } from '../src/diary.mjs';
 import { detect, keywords, normalizeRules } from '../src/rules.mjs';
 import { pairsOf, completedPairs } from '../src/capture.mjs';
-import { buildMemory, recallLines, warmStart } from '../src/inject.mjs';
+import { buildMemory, recallLines, warmStart, isWarmSession, WARM_MAX, WARM_RATIO } from '../src/inject.mjs';
 import { consolidate, extractMemories, findRival, newEntry, searchMemories, strength } from '../src/memory.mjs';
 import { cleanGroupText, sentPart, replayRows, recentGroupReplay } from '../src/group.mjs';
 import { isUsable, makeCard, topicsOf } from '../src/handoff.mjs';
@@ -366,6 +366,34 @@ const blankLook = await look({ home: box });
 check('图不存在时只说人话、不抛', missLook.ok === false && typeof missLook.error === 'string' && blankLook.ok === false && typeof blankLook.error === 'string');
 const asyncChecks = await Promise.all([(async () => (await look({ home: box, file: join(box, 'x.png') })).ok === false)()]);
 check('look 永远不抛', asyncChecks.every(Boolean));
+
+// 新会话头两轮预算放大 —— 回应「换会话就不是原来那条鱼」的担心
+const fullSession = {
+  events: Array.from({ length: 12 }, (_, i) => ({
+    type: i % 2 ? 'assistant/message' : 'user/message',
+    seq: i + 1,
+    data: { source: { kind: 'user' }, content: [{ type: 'text', text: '第' + i + '句' }] },
+  })),
+};
+check('空会话算温启动', isWarmSession({ events: [] }) === true);
+check('聊开之后不算温启动', isWarmSession(fullSession) === false);
+(() => {
+  const box3 = mkdtempSync(join(tmpdir(), 'soul-warm-'));
+  try {
+    const st = new SoulStore(box3);
+    st.ensure();
+    const nouns = ['猫', '狗', '桌子', '书架', '键盘', '显示器', '水杯', '台灯', '窗台', '地毯', '拖鞋', '窗帘', '风扇', '路由器', '硬盘', '耳机', '音箱', '椅子', '闹钟', '挂钟'];
+    nouns.forEach((noun, i) => st.addMemory({ text: '他的' + noun + '放在第' + i + '个位置', level: 'fact' }));
+    const cold = buildMemory(st, fullSession, { tokenBudget: 1200 });
+    const warm = buildMemory(st, { events: [] }, { tokenBudget: 1200 });
+    const cap = Math.min(WARM_MAX, Math.round(1200 * WARM_RATIO));
+    check('温启动注入比平时长', warm.length > cold.length);
+    check('温启动也不超过放大后的上限', warm.length <= cap * 1.15);
+    check('日常注入仍在预算内', cold.length <= 1200 * 1.15);
+  } finally {
+    rmSync(box3, { recursive: true, force: true });
+  }
+})();
 
 console.log(failures ? `\n${failures} 个失败` : '\n全过');
 process.exit(failures ? 1 : 0);
