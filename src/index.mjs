@@ -813,26 +813,25 @@ export function acquireSoul(ctx) {
         const hits = [];
         for (const date of dates) {
           for (const record of store.journal(date)) {
-            const hay = `${record.user ?? ''}
-${record.assistant ?? ''}`;
+            const hay = (record.user ?? '') + '\n' + (record.assistant ?? '');
             const score = words.filter(word => hay.includes(word)).length;
             if (!score) continue;
             const user = clip(record.user ?? '', 120);
-            const dedupe = `${date}\u0000${user}`;
+            const dedupe = date + '\u0000' + user;
             if (hits.some(item => item.dedupe === dedupe)) continue;
             hits.push({ date, score, dedupe, sid: record.sid ?? '', user, assistant: clip(record.assistant ?? '', 160) });
           }
         }
-        if (!hits.length) return { text: `最近 ${days} 天的流水里没找到「${query}」。` };
+        if (!hits.length) return { text: '最近 ' + days + ' 天的流水里没找到「' + query + '」。' };
         const picked = hits.sort((a, b) => b.score - a.score).slice(0, limit);
         const lines = picked.map(
-          item => `[${item.date}] 他：${item.user || '（空）'}
-           我：${item.assistant || '（没回完）'}`,
+          item => '[' + item.date + '] 他：' + (item.user || '（空）') + '\n           我：' + (item.assistant || '（没回完）'),
         );
-        return { text: `翻到 ${hits.length} 条，取最相关的 ${picked.length} 条（共翻了 ${dates.length} 天）：
-
-${lines.join('
-')}` };
+        return {
+          text:
+            '翻到 ' + hits.length + ' 条，取最相关的 ' + picked.length + ' 条（共翻了 ' + dates.length + ' 天）：\n\n' +
+            lines.join('\n'),
+        };
       },
     },
     {
