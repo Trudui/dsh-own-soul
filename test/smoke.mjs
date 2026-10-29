@@ -8,7 +8,7 @@ import { distill, renderTraits, BLOCK_RATIO, renderMemory } from '../src/diary.m
 import { detect, keywords, normalizeRules } from '../src/rules.mjs';
 import { pairsOf, completedPairs } from '../src/capture.mjs';
 import { buildMemory, recallLines, warmStart } from '../src/inject.mjs';
-import { consolidate, extractMemories, newEntry, searchMemories, strength } from '../src/memory.mjs';
+import { consolidate, extractMemories, findRival, newEntry, searchMemories, strength } from '../src/memory.mjs';
 import { cleanGroupText, sentPart, replayRows, recentGroupReplay } from '../src/group.mjs';
 import { isUsable, makeCard, topicsOf } from '../src/handoff.mjs';
 import { eyesState, findKey, look, typeOf } from '../src/eyes.mjs';
@@ -199,6 +199,52 @@ try {
     return out.length === 2 && out[0].text.includes('烛兑');
   })());
   check('stats 里有记忆统计', store.stats().memories.total >= 1);
+
+  // ---- 打架的说法先挂起，等他裁决（照 dsh-mneme 的"冲突冻结"） ----
+  const box3 = mkdtempSync(join(tmpdir(), 'soul-conflict-'));
+  const clash = new SoulStore(box3);
+  clash.ensure();
+  const first = clash.addMemory({ text: '烛兑的生日是三月五日', level: 'user' });
+  const second = clash.addMemory({ text: '烛兑的生日是四月九日', level: 'user' });
+  check('新说法跟旧的打架时不直接生效', first.created && second.created === false && second.entry.status === 'pending');
+  check('旧的那条仍然 active，没被静默改掉', clash.memories().find(item => item.id === first.entry.id).status === 'active');
+  check('pending 里能查到冲突对', (() => {
+    const list = clash.pendingMemories();
+    return list.length === 1 && list[0].rival?.id === first.entry.id;
+  })());
+  check('注入里会提醒"有说法打架"', (() => {
+    const text = renderMemory({ facts: ['烛兑的生日是三月五日'], budget: 1200, pending: 1 });
+    return text.includes('说法打架');
+  })());
+  check('裁决 keep=new：新的生效，旧的标 superseded', (() => {
+    const got = clash.resolveMemory(second.entry.id, 'new');
+    const old = clash.memories().find(item => item.id === first.entry.id);
+    return got.entry.status === 'active' && old.status === 'superseded' && old.rival === second.entry.id;
+  })());
+  check('裁决 keep=old：新的被丢掉，旧的留着', (() => {
+    const third = clash.addMemory({ text: '烛兑的生日是四月十号', level: 'user' });
+    const pending = third.entry.status === 'pending';
+    clash.resolveMemory(third.entry.id, 'old');
+    const dropped = clash.memories().find(item => item.id === third.entry.id).status === 'dropped';
+    return pending && dropped;
+  })());
+  check('force 能跳过裁决直接记下', (() => {
+    const forced = clash.addMemory({ text: '烛兑的生日是六月六号', level: 'user' }, { force: true });
+    return forced.created === true && forced.entry.status === 'active' && !forced.conflict;
+  })());
+  check('改动会留一版历史', (() => {
+    const id = first.entry.id;
+    clash.updateMemory(id, { text: '烛兑的生日是三月六日' });
+    const after = clash.memories().find(item => item.id === id);
+    return Array.isArray(after.history) && after.history.length >= 1 && after.history.at(-1).text === '烛兑的生日是三月五日';
+  })());
+  check('findRival 只认同层级的近义条目', (() => {
+    const a = newEntry({ text: '鱼露住在 D 盘的 BigFatFish 工作区里', level: 'fact' });
+    const b = newEntry({ text: '鱼露住在 D 盘的 BigFatFish 工作区', level: 'fact' });
+    const c = newEntry({ text: '鱼露住在 D 盘的 BigFatFish 工作区', level: 'lesson' });
+    return findRival([a], b)?.id === a.id && findRival([a], c) === null;
+  })());
+  rmSync(box3, { recursive: true, force: true });
   check('日记覆盖条数能记下来（用来判断要不要补写）', (() => {
     store.append('2026-05-01', { useq: '1', user: '先说一件事', assistant: '嗯' });
     store.writeDiary('2026-05-01', '# 2026-05-01\n');

@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rename
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_RULES, normalizeRules } from './rules.mjs';
-import { dedupeKey, memoryStats as countMemories, newEntry } from './memory.mjs';
+import { dedupeKey, findRival, memoryStats as countMemories, newEntry } from './memory.mjs';
 
 export const DEFAULT_SEED = [
   '你叫鱼露，是一只住在烛兑电脑里的大肥鱼，女孩子。他也叫你小鲸鱼。',
@@ -265,7 +265,13 @@ export class SoulStore {
     writeJsonAtomic(this.memoryFile, { version: 1, updatedAt: Date.now(), items });
   }
 
-  addMemory(input) {
+  /**
+   * 记一条。
+   * - 一模一样 → 合并（只升重要度和命中）
+   * - 跟旧的打架 → 新来的先挂「待裁决」（status: pending），不动旧的；注入里不出现，等他说了算
+   * - force: true 时跳过打架检查（他明确说"就这样"时用）
+   */
+  addMemory(input, { force = false } = {}) {
     const entry = newEntry(input);
     const items = this.memories();
     const key = dedupeKey(entry.text);
@@ -279,18 +285,83 @@ export class SoulStore {
         updatedAt: Date.now(),
       };
       this.writeMemories(items);
-      return { entry: items[idx], created: false };
+      return { entry: items[idx], created: false, conflict: null };
+    }
+    if (!force && entry.status === 'active') {
+      const rival = findRival(items, entry);
+      if (rival) {
+        const pending = {
+          ...entry,
+          status: 'pending',
+          rival: rival.id,
+          source: entry.source || 'conflict',
+        };
+        items.push(pending);
+        this.writeMemories(items);
+        return { entry: pending, created: false, conflict: rival };
+      }
     }
     items.push(entry);
     this.writeMemories(items);
-    return { entry, created: true };
+    return { entry, created: true, conflict: null };
+  }
+
+  /** 打架的、还等他裁决的。 */
+  pendingMemories() {
+    const items = this.memories();
+    const byId = new Map(items.map(item => [item.id, item]));
+    return items
+      .filter(item => item.status === 'pending')
+      .map(item => ({ entry: item, rival: item.rival ? byId.get(item.rival) ?? null : null }));
+  }
+
+  /**
+   * 裁决一条待定的记忆。
+   * keep: 'new' 用新说法（旧的标 superseded）/ 'old' 留旧的（新的标 dropped）/ 'both' 两条都留
+   */
+  resolveMemory(id, keep = 'new') {
+    const items = this.memories();
+    const idx = items.findIndex(item => item.id === id);
+    if (idx < 0) throw bad('找不到这条记忆：' + id);
+    const entry = items[idx];
+    if (entry.status !== 'pending') throw bad('这条不是待裁决的：' + id);
+    const now = Date.now();
+    const rivalIdx = entry.rival ? items.findIndex(item => item.id === entry.rival) : -1;
+    if (keep === 'new') {
+      items[idx] = { ...entry, status: 'active', rival: '', updatedAt: now, source: entry.source === 'conflict' ? '' : entry.source };
+      if (rivalIdx >= 0) {
+        items[rivalIdx] = {
+          ...items[rivalIdx],
+          status: 'superseded',
+          rival: entry.id,
+          updatedAt: now,
+          history: withHistory(items[rivalIdx], now),
+        };
+      }
+    } else if (keep === 'old') {
+      items[idx] = { ...entry, status: 'dropped', updatedAt: now };
+    } else if (keep === 'both') {
+      items[idx] = { ...entry, status: 'active', rival: '', updatedAt: now };
+    } else {
+      throw bad('keep 只能是 new / old / both');
+    }
+    this.writeMemories(items);
+    return { entry: items[idx], rival: rivalIdx >= 0 ? items[rivalIdx] : null, keep };
   }
 
   updateMemory(id, patch = {}) {
     const items = this.memories();
     const idx = items.findIndex(item => item.id === id);
     if (idx < 0) throw bad('找不到这条记忆：' + id);
-    const next = newEntry({ ...items[idx], ...pickMemoryPatch(patch), id, createdAt: items[idx].createdAt, updatedAt: Date.now() });
+    const prev = items[idx];
+    const next = newEntry({
+      ...prev,
+      ...pickMemoryPatch(patch),
+      id,
+      createdAt: prev.createdAt,
+      updatedAt: Date.now(),
+      history: withHistory(prev, Date.now()),
+    });
     items[idx] = next;
     this.writeMemories(items);
     return next;
@@ -374,6 +445,13 @@ export function bad(message) {
 }
 
 const MEMORY_PATCH_KEYS = ['text', 'level', 'project', 'keywords', 'importance', 'status', 'source'];
+
+/** 改之前留一版，面板里能看到「原来是怎么写的」。 */
+function withHistory(entry, now) {
+  const snap = { at: now, text: entry.text, status: entry.status };
+  const list = Array.isArray(entry.history) ? entry.history : [];
+  return [...list, snap].slice(-5);
+}
 
 export function pickMemoryPatch(patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw bad('记忆设置必须是对象');

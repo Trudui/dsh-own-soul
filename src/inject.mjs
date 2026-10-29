@@ -55,6 +55,7 @@ export function buildMemory(store, session, state, onError) {
     const budget = Number(state.tokenBudget) || 1200;
     const factCap = Math.floor(budget * BLOCK_RATIO.facts);
     const hot = pickFacts(items, texts, Math.max(2, Math.round(factCap / 95)));
+    const pending = items.filter(entry => entry.status === 'pending').length;
     const recalled = pickRecall(items, texts, hot);
     return renderMemory({
       handoff: warmStart(store, session),
@@ -62,6 +63,7 @@ export function buildMemory(store, session, state, onError) {
       facts: hot.map(entry => memoryLine(entry, 90)),
       recent: recentLines(store, 3),
       recall: [...recallLines(store, texts, 2), ...recalled.map(entry => memoryLine(entry, 70))],
+      pending,
       budget,
       minSalience: state.minSalience ?? 0.15,
     });

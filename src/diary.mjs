@@ -264,6 +264,7 @@ export function renderMemory({
   facts = [],
   recent = [],
   recall = [],
+  pending = 0,
   budget = 1200,
   minSalience = 0.15,
 }) {
@@ -281,6 +282,9 @@ export function renderMemory({
   body.push(...packBlock('我记得的事：', facts.map(line => `- ${line}`), cap.facts), '');
   body.push(...packBlock('最近的事：', recent.map(line => `- ${line}`), cap.recent), '');
   body.push(...packBlock('突然想起来：', recall.map(line => `- ${line}`), cap.recall));
+  if (pending > 0) {
+    body.push('', `（有 ${pending} 条说法打架的事我拿不准，先不当作数——他要是提起，就说「这条我记混了，你说是哪个」再记。）`);
+  }
   while (body.length && body[body.length - 1] === '') body.pop();
   if (!body.length) return '';
   return [

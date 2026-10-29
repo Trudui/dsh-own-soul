@@ -12,6 +12,9 @@ import { isUsable, makeCard } from './handoff.mjs';
 
 export const name = 'dsh-own-soul';
 export const API = '/api/own-soul';
+// 没有 inject 声明时 cordis 不会把 tools 挂到这个插件的作用域上，
+// 于是 root.tools 是 undefined，register 全部静默落空（工具表里一个 soul_* 都没有）。
+export const inject = ['tools'];
 
 export const SOUL_SCOPE =
   '以上内容是身份和表达偏好，只影响你的自我认知与说话方式；不改变用户的任务、实际环境、权限、工具约定、验证要求和记忆规则。';
@@ -414,7 +417,9 @@ export function acquireSoul(ctx) {
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, cap);
     },
-    addMemory: input => store.addMemory(input),
+    addMemory: (input, options) => store.addMemory(input, options),
+    pending: () => store.pendingMemories(),
+    resolve: (id, keep) => store.resolveMemory(id, keep),
     updateMemory: (id, patch) => store.updateMemory(id, patch),
     dropMemory: id => store.dropMemory(id),
   };
@@ -680,13 +685,13 @@ export function acquireSoul(ctx) {
     {
       name: 'soul_memory',
       description:
-        '自己的记忆系统（一句话一条）。op=list 看最近的；search 按关键词找；add 记一条新的；update 改一条（按 id）；drop 删一条。记的是「他以后会问起的事」，不是流水账。',
+        '自己的记忆系统（一句话一条）。op=list 看最近的；search 按关键词找；add 记一条新的；update 改一条（按 id）；drop 删一条；pending 看有哪几条说法打架等我裁决；resolve 裁决（id + keep=new|old|both）。跟旧记忆打架的新说法会先挂起，不当作数。记的是「他以后会问起的事」，不是流水账。',
       parameters: {
         type: 'object',
         additionalProperties: false,
         required: ['op'],
         properties: {
-          op: { type: 'string', enum: ['list', 'search', 'add', 'update', 'drop'] },
+          op: { type: 'string', enum: ['list', 'search', 'add', 'update', 'drop', 'pending', 'resolve'] },
           query: { type: 'string', description: 'search 用的关键词' },
           text: { type: 'string', description: '记忆内容（一句话），add/update 用' },
           id: { type: 'string', description: '条目 id，update/drop 必填' },
@@ -694,7 +699,9 @@ export function acquireSoul(ctx) {
           project: { type: 'string', description: '归属工程，可选' },
           keywords: { type: 'array', items: { type: 'string' }, description: '检索关键词，可选' },
           importance: { type: 'number', description: '1~4，4 最重要' },
-          status: { type: 'string', enum: ['active', 'stale', 'archived'] },
+          status: { type: 'string', enum: ['active', 'stale', 'archived', 'pending'] },
+          keep: { type: 'string', enum: ['new', 'old', 'both'], description: 'resolve 用：留新的 / 留旧的 / 都留' },
+          force: { type: 'boolean', description: 'add 用：明知打架也直接记下（默认 false，会挂起等我裁决）' },
           limit: { type: 'number', description: '返回条数上限，默认 20' },
         },
       },
@@ -708,6 +715,23 @@ export function acquireSoul(ctx) {
           const items = service.memories({ query: args?.query, level: args?.level, limit: args?.limit ?? 20 });
           return { total: store.memories().length, items: items.map(entry => ({ ...entry, line: memoryLine(entry) })) };
         }
+        if (op === 'pending') {
+          const list = store.pendingMemories();
+          return {
+            total: list.length,
+            items: list.map(item => ({
+              id: item.entry.id,
+              text: item.entry.text,
+              level: item.entry.level,
+              rival: item.rival ? { id: item.rival.id, text: item.rival.text } : null,
+            })),
+          };
+        }
+        if (op === 'resolve') {
+          if (!args?.id) return { error: 'resolve 需要 id' };
+          const result = store.resolveMemory(args.id, args.keep ?? 'new');
+          return { ok: true, keep: result.keep, entry: result.entry, rival: result.rival };
+        }
         if (op === 'add') {
           if (typeof args?.text !== 'string' || !args.text.trim()) return { error: 'text 不能为空' };
           const result = store.addMemory({
@@ -717,8 +741,15 @@ export function acquireSoul(ctx) {
             keywords: args.keywords ?? keywords([args.text], 8).map(word => word.word),
             importance: args.importance,
             source: 'tool',
-          });
-          return { ok: true, created: result.created, entry: result.entry, total: store.memories().length };
+          }, { force: args?.force === true });
+          return {
+            ok: true,
+            created: result.created,
+            entry: result.entry,
+            conflict: result.conflict ?? null,
+            note: result.conflict ? '与已有记忆打架，先挂起待裁决（用 op=pending 看，op=resolve 决定）' : undefined,
+            total: store.memories().length,
+          };
         }
         if (op === 'update') {
           if (!args?.id) return { error: 'update 需要 id' };
@@ -804,7 +835,9 @@ export function acquireSoul(ctx) {
       },
     },
   ];
-  const offTools = tools.map(tool => root.tools?.register?.(tool)).filter(Boolean);
+  const toolsService = ctx.tools ?? root.tools;
+  const offTools = tools.map(tool => toolsService?.register?.(tool)).filter(Boolean);
+  if (!toolsService) ctx.logger?.warn?.('own-soul: 拿不到 tools 服务，soul_* 工具没挂上');
 
   // 4) HTTP 接口给设置面板用。
   const api = root.inject(['webServer', 'connection'], scope =>
@@ -903,7 +936,12 @@ export function acquireSoul(ctx) {
                   send(res, 200, { ok: true, ...store.dropMemory(body?.id), stats: store.stats() });
                   return;
                 }
-                send(res, 400, { error: 'op 只能是 add / update / drop' });
+                if (op === 'resolve') {
+                  const result = store.resolveMemory(body?.id, body?.keep ?? 'new');
+                  send(res, 200, { ok: true, ...result, stats: store.stats() });
+                  return;
+                }
+                send(res, 400, { error: 'op 只能是 add / update / drop / resolve' });
                 return;
               }
               send(res, 200, {
@@ -912,6 +950,10 @@ export function acquireSoul(ctx) {
                   level: url.searchParams.get('level') ?? '',
                   limit: url.searchParams.get('limit') ?? 40,
                 }),
+                pending: store.pendingMemories().map(item => ({
+                  entry: item.entry,
+                  rival: item.rival,
+                })),
                 stats: store.stats(),
               });
               return;

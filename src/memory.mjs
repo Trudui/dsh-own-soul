@@ -28,13 +28,56 @@ export function newEntry(input = {}) {
     project: typeof input.project === 'string' ? input.project.slice(0, 40) : '',
     keywords: normalizeKeywords(input.keywords),
     importance: clamp(input.importance, 1, 4, 2),
-    status: ['active', 'stale', 'archived'].includes(input.status) ? input.status : 'active',
+    status: ['active', 'stale', 'archived', 'pending', 'superseded', 'dropped'].includes(input.status)
+      ? input.status
+      : 'active',
     source: typeof input.source === 'string' ? input.source.slice(0, 60) : '',
+    // 跟这条打架的那条是谁：pending = 新来的等裁决，superseded = 被新来的顶掉
+    rival: typeof input.rival === 'string' ? input.rival.slice(0, 40) : '',
+    // 改过几次、原来长什么样（最多留 5 版，面板能看）
+    history: Array.isArray(input.history) ? input.history.slice(-5) : [],
     createdAt: Number.isFinite(input.createdAt) ? input.createdAt : now,
     updatedAt: Number.isFinite(input.updatedAt) ? input.updatedAt : now,
     hit: Number.isFinite(input.hit) ? input.hit : 0,
     lastHitAt: Number.isFinite(input.lastHitAt) ? input.lastHitAt : 0,
   };
+}
+
+/** 两条记忆像到什么程度算「可能打架」。 */
+export const CONFLICT_SIM = 0.55;
+/** 开头这么多字一样、后面不一样 → 也当作同一件事的两种说法。 */
+export const SAME_HEAD = 6;
+
+/**
+ * 找一条跟新来的内容打架的旧记忆。
+ * 判据：同层级、旧的是 active、文本不是一模一样（一模一样走合并）、相似度够高。
+ */
+/** 两条话开头能对上多长（去掉标点空白后比）。「烛兑的生日是三月五日 / 四月九日」这种就是同一句话换了值。 */
+export function commonPrefix(a, b, limit = 40) {
+  const x = dedupeKey(a);
+  const y = dedupeKey(b);
+  const n = Math.min(x.length, y.length, limit);
+  let i = 0;
+  while (i < n && x[i] === y[i]) i += 1;
+  return i;
+}
+
+export function findRival(items, entry, threshold = CONFLICT_SIM) {
+  let best = null;
+  let bestSim = 0;
+  for (const other of items) {
+    if (other.status !== 'active') continue;
+    if (other.level !== entry.level) continue;
+    if (dedupeKey(other.text) === dedupeKey(entry.text)) continue;
+    const sim = textSim(other, entry);
+    // 相似度够；或者开头一长段完全一样、只是后面的值不同（同一件事换了说法/换了值）
+    const sameHead = commonPrefix(other.text, entry.text) >= SAME_HEAD;
+    if ((sim >= threshold || sameHead) && sim > bestSim - (sameHead ? 1 : 0)) {
+      best = other;
+      bestSim = sim;
+    }
+  }
+  return best;
 }
 
 export function normalizeKeywords(input) {
@@ -305,12 +348,16 @@ export function memoryStats(items, now = Date.now()) {
   const byLevel = {};
   const byClarity = { clear: 0, fuzzy: 0, faint: 0 };
   let active = 0;
+  let pending = 0;
+  let superseded = 0;
   for (const entry of items) {
     byLevel[entry.level] = (byLevel[entry.level] ?? 0) + 1;
+    if (entry.status === 'pending') pending += 1;
+    if (entry.status === 'superseded') superseded += 1;
     if (entry.status === 'active') {
       active += 1;
       byClarity[clarity(entry, now)] += 1;
     }
   }
-  return { total: items.length, active, byLevel, byClarity, ...capacityStats(items) };
+  return { total: items.length, active, pending, superseded, byLevel, byClarity, ...capacityStats(items) };
 }

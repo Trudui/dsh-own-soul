@@ -1,6 +1,6 @@
 {
   "name": "dsh-own-soul",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "自己的人格，自己长：可安装、可调试、能自己成长的 DSH 人格插件（纯规则 + 每晚 23:00 日记与离线蒸馏）",
   "type": "module",
   "license": "MIT",
