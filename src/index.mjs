@@ -253,7 +253,8 @@ export function acquireSoul(ctx) {
   };
 
   // 列出"可以选"的对话：优先问 sessions 服务，拿不到就只靠白名单 + 手工填 id。
-  const listCandidates = async () => {
+  const listCandidates = async (options = {}) => {
+    const allScopes = options?.all === true;
     const state = store.state();
     const enabledIds = new Set((state.sessions ?? []).map(entry => entry.id));
     const out = [];
@@ -332,8 +333,9 @@ export function acquireSoul(ctx) {
       if (out.some(item => item.id === entry.id)) continue;
       out.push({ id: entry.id, title: entry.label || titles.get(entry.id) || '', cwd: '', updatedAt: entry.addedAt ?? 0, running: false, blank: false, enabled: true });
     }
-    // 只留这个工作区里的对话；已经在白名单里的照留，不然勾了却看不见、取消不掉。
-    const cwds = await workspaceCwds();
+    // 默认只留这个工作区里的对话；已经在白名单里的照留，不然勾了却看不见、取消不掉。
+    // allScopes=true 时不过滤（面板上「显示全部对话」用）。
+    const cwds = allScopes ? new Set() : await workspaceCwds();
     const norm = (p) => String(p ?? '').replace(/[\/]+$/, '').toLowerCase();
     const list = cwds.size
       ? out.filter(item => item.enabled || !item.cwd || cwds.has(norm(item.cwd)))
@@ -464,6 +466,7 @@ export function acquireSoul(ctx) {
     resolve: (id, keep) => store.resolveMemory(id, keep),
     updateMemory: (id, patch) => store.updateMemory(id, patch),
     dropMemory: id => store.dropMemory(id),
+    clearHandoff: () => store.clearHandoff(),
     wipe: () => {
       const removed = store.wipeMemory();
       return { removed, stats: store.stats() };
@@ -533,6 +536,7 @@ export function acquireSoul(ctx) {
   const CARD_GAP_MS = 30 * 60 * 1000;
   const maybeHandoff = session => {
     const state = store.state();
+    if (state.handoffMode !== 'auto') return '';
     if (!sessionOn(state, session.id)) return '';
     const pairs = pairsOf(session);
     if (pairs.length < CARD_AFTER_PAIRS) return '';
@@ -699,6 +703,7 @@ export function acquireSoul(ctx) {
         properties: {
           op: { type: 'string', enum: ['current', 'list', 'add', 'remove'] },
           id: { type: 'string', description: '目标会话 id，add/remove 用；add 不传则用当前对话' },
+          all: { type: 'boolean', description: 'list 时是否列出全部工作区的对话（默认只列当前工作区）' },
           label: { type: 'string', description: '给这个对话起个备注名，可选' },
         },
       },
@@ -718,7 +723,7 @@ export function acquireSoul(ctx) {
             enabled: sessionOn(store.state(), current),
           };
         }
-        if (op === 'list') return { sessions: await listCandidates() };
+        if (op === 'list') return { sessions: await listCandidates({ all: args?.all === true }) };
         const target = (typeof args?.id === 'string' && args.id.trim()) || current;
         if (!target) return { error: '拿不到会话 id，请显式传 id' };
         const next =
@@ -912,13 +917,13 @@ export function acquireSoul(ctx) {
     {
       name: 'soul_handoff',
       description:
-        '接续卡：op=read 看最新一张（上次干到哪了）；op=write 现在这一刻写一张交接条（新会话会据此温启动）。只记事情本身，不记情绪。',
+        '接续卡：op=read 看最新一张（上次干到哪了）；op=write 现在这一刻写一张交接条（新会话会据此温启动）；op=clear 把接续卡和留档都清掉。只记事情本身，不记情绪。',
       parameters: {
         type: 'object',
         additionalProperties: false,
         required: ['op'],
         properties: {
-          op: { type: 'string', enum: ['read', 'write'] },
+          op: { type: 'string', enum: ['read', 'write', 'clear'] },
         },
       },
       output: {
@@ -926,6 +931,10 @@ export function acquireSoul(ctx) {
         render: (_args, value) => [{ type: 'text', text: typeof value?.text === 'string' ? value.text : JSON.stringify(value) }],
       },
       async execute(args, exec) {
+        if (args?.op === 'clear') {
+          const removed = store.clearHandoff();
+          return { ok: true, text: '接续卡清掉了：卡 ' + removed.card + ' 张、留档 ' + removed.archive + ' 份。' };
+        }
         if (args?.op === 'write') {
           const session = exec?.agent?.session;
           const pairs = session ? pairsOf(session) : [];
@@ -993,19 +1002,22 @@ export function acquireSoul(ctx) {
               return;
             }
             if (route === '/sessions') {
+              const q = new URL(req.url ?? '/', 'http://localhost').searchParams;
               if (req.method === 'POST') {
                 const body = await readBody(req);
                 const op = body?.op === 'remove' ? 'remove' : body?.op === 'add' ? 'add' : '';
                 if (!op) {
-                  send(res, 400, { error: 'op 只能是 add 或 remove' });
+                  // 只是要列表（带不带 scope 都行）
+                  send(res, 200, { sessions: await listCandidates({ all: body?.scope === 'all' }) });
                   return;
                 }
                 const next = op === 'add' ? service.addSession(body) : service.removeSession(body);
                 res.setHeader('ETag', store.revision());
-                send(res, 200, { state: next, sessions: await listCandidates() });
+                send(res, 200, { state: next, sessions: await listCandidates({ all: body?.scope === 'all' }) });
                 return;
               }
-              send(res, 200, { sessions: await listCandidates(), ...(process.env.OWNSOUL_DEBUG ? { diag: await probeServices() } : {}) });
+              const all = q.get('scope') === 'all';
+              send(res, 200, { sessions: await listCandidates({ all }), ...(process.env.OWNSOUL_DEBUG ? { diag: await probeServices() } : {}) });
               return;
             }
             if (route === '/traits') {
@@ -1099,6 +1111,10 @@ export function acquireSoul(ctx) {
             if (route === '/handoff') {
               if (req.method === 'POST') {
                 const body = await readBody(req);
+                if ((body?.op ?? '') === 'clear') {
+                  send(res, 200, { ok: true, ...store.clearHandoff() });
+                  return;
+                }
                 const date = isoDate(new Date());
                 const records = Array.isArray(body?.records) && body.records.length ? body.records : store.journal(date).slice(-12);
                 const card = makeCard({ records, date, at: Date.now() });

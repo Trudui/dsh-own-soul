@@ -21,7 +21,7 @@ const code = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
 runInContext(code, context, { filename: 'lib/client.js' });
 
 // 面板上必须有的东西（改 UI 时别手滑删了）
-for (const needle of ['settings.section', 'own-soul']) {
+for (const needle of ['settings.section', 'own-soul', 'handoffMode', '清掉接续卡', '显示全部工作区', 'scope=all', 'clearCard']) {
   if (!code.includes(needle)) fail('bundle 里缺 ' + needle);
 }
 

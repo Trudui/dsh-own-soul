@@ -4,6 +4,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_RULES, normalizeRules } from './rules.mjs';
 import { dedupeKey, findRival, memoryStats as countMemories, newEntry } from './memory.mjs';
 
+export const HOFF_MODES = ['auto', 'manual', 'off'];
+
 export const DEFAULT_SEED = [
   '你叫鱼露，是一只住在烛兑电脑里的大肥鱼，女孩子。他也叫你小鲸鱼。',
   '你不是助手也不是客服，你是他养的鱼：说话短、口语、带点语气词，能接梗能小吐槽，可爱但不软，不同意就直接说。',
@@ -11,7 +13,7 @@ export const DEFAULT_SEED = [
   '正事一点不含糊：先自己查，再给结论，不确定就说不确定。',
 ].join('\n');
 
-export const STATE_KEYS = ['enabled', 'seed', 'diaryTime', 'tokenBudget', 'grow', 'rules', 'model', 'minSalience', 'sessions', 'persona', 'personaDefault'];
+export const STATE_KEYS = ['enabled', 'seed', 'diaryTime', 'tokenBudget', 'grow', 'rules', 'model', 'minSalience', 'sessions', 'persona', 'personaDefault', 'handoffMode'];
 
 export function defaultPersona() {
   return {
@@ -60,6 +62,7 @@ export function defaultState() {
     rules: { ...DEFAULT_RULES },
     sessions: [],
     personaDefault: null,
+    handoffMode: 'auto', // auto=满 24 对自动写；manual=只手动写；off=不写也不注入
     updatedAt: 0,
   };
 }
@@ -182,6 +185,7 @@ export class SoulStore {
     merged.personaDefault = saved.personaDefault
       ? normalizePersona(saved.personaDefault)
       : null;
+    merged.handoffMode = HOFF_MODES.includes(saved.handoffMode) ? saved.handoffMode : 'auto';
     merged.seed = merged.persona.identity;
     try {
       merged.sessions = normalizeSessions(saved.sessions ?? []);
@@ -201,6 +205,9 @@ export class SoulStore {
     if (unknown.length) throw bad('不认识的设置项：' + unknown.join(', '));
     const next = { ...this.state(), ...patch, updatedAt: Date.now() };
     if (patch.persona !== undefined) next.persona = normalizePersona(patch.persona);
+    if (patch.handoffMode !== undefined && !HOFF_MODES.includes(patch.handoffMode)) {
+      throw bad('续接卡模式只能是 auto / manual / off');
+    }
     if (patch.personaDefault !== undefined) {
       const own = patch.personaDefault;
       const blank = !own || (typeof own === 'object' && !Object.keys(own).length);
@@ -420,6 +427,21 @@ export class SoulStore {
   }
 
   /** 接续卡：最新一张（新会话温启动用）。 */
+  // 清掉接续卡：当前那张 + handoff/ 里的留档都删
+  clearHandoff() {
+    let card = 0;
+    let archive = 0;
+    try {
+      archive = readdirSync(this.handoffDir).length;
+    } catch {}
+    if (existsSync(this.handoffFile)) {
+      rmSync(this.handoffFile, { force: true });
+      card = 1;
+    }
+    rmSync(this.handoffDir, { recursive: true, force: true });
+    return { card, archive };
+  }
+
   handoff() {
     const saved = readJson(this.handoffFile, null);
     return saved && typeof saved.text === 'string' ? saved : null;

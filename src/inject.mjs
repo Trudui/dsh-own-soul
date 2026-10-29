@@ -95,6 +95,8 @@ export function buildMemory(store, session, state, onError) {
  */
 export function warmStart(store, session) {
   try {
+    // 关了接续卡就不注入；手动模式下只要是写好的卡仍然用（写了就是为了用）
+    if (store.state().handoffMode === 'off') return '';
     const pairs = pairsOf(session);
     if (pairs.length > 2) return '';
     const card = store.handoff();
