@@ -1,6 +1,6 @@
 {
   "name": "dsh-own-soul",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "自己的人格，自己长：可安装、可调试、能自己成长的 DSH 人格插件（纯规则 + 每晚 23:00 日记与离线蒸馏）",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,9 @@
   ],
   "scripts": {
     "check": "node test/smoke.mjs",
-    "check:client": "node test/client-check.mjs"
+    "check:client": "node test/client-check.mjs",
+    "check:wipe": "node test/wipe.mjs",
+    "check:all": "node test/smoke.mjs && node test/wipe.mjs && node test/client-check.mjs"
   },
   "dsh": {
     "bundle": {

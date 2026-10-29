@@ -216,6 +216,42 @@ export function acquireSoul(ctx) {
     timer.unref?.();
   };
 
+  // 「只显示本工作区的对话」：先看现在有谁在跑（agents.list），
+  // 没有活的就退回"最近动过的那个会话"所在目录；拿不到信息就不筛。
+  const workspaceCwds = async () => {
+    const norm = (p) => String(p ?? '').replace(/[\/]+$/, '').toLowerCase();
+    const out = new Set();
+    try {
+      const sessions = root.get?.('sessions') ?? null;
+      const agents = root.get?.('agents') ?? null;
+      const raw = sessions && typeof sessions.list === 'function' ? await sessions.list() : [];
+      const items = Array.isArray(raw) ? raw : raw instanceof Map ? [...raw.values()] : Object.values(raw ?? {});
+      const live = new Set();
+      try {
+        const running = typeof agents?.list === 'function' ? agents.list() : [];
+        for (const item of Array.isArray(running) ? running : []) {
+          const sid = item?.session?.header?.id ?? item?.session?.id ?? item?.sessionId ?? item?.id;
+          if (sid) live.add(String(sid));
+        }
+      } catch {}
+      const rows = items
+        .map(item => ({ header: item?.header ?? item?.session?.header ?? {} }))
+        .filter(row => row.header?.cwd);
+      let picked = rows.filter(row => live.size > 0 && live.has(String(row.header.id ?? '')));
+      if (!picked.length) {
+        const mtimes = sessionMtimes();
+        const newest = rows
+          .map(row => ({ row, at: mtimes.get(String(row.header.id ?? '')) ?? 0 }))
+          .sort((a, b) => b.at - a.at)[0];
+        if (newest) picked = [newest.row];
+      }
+      for (const row of picked) out.add(norm(row.header.cwd));
+    } catch (error) {
+      debug('workspace cwds failed', error.message);
+    }
+    return out;
+  };
+
   // 列出"可以选"的对话：优先问 sessions 服务，拿不到就只靠白名单 + 手工填 id。
   const listCandidates = async () => {
     const state = store.state();
@@ -296,8 +332,14 @@ export function acquireSoul(ctx) {
       if (out.some(item => item.id === entry.id)) continue;
       out.push({ id: entry.id, title: entry.label || titles.get(entry.id) || '', cwd: '', updatedAt: entry.addedAt ?? 0, running: false, blank: false, enabled: true });
     }
-    out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    return out.slice(0, 40);
+    // 只留这个工作区里的对话；已经在白名单里的照留，不然勾了却看不见、取消不掉。
+    const cwds = await workspaceCwds();
+    const norm = (p) => String(p ?? '').replace(/[\/]+$/, '').toLowerCase();
+    const list = cwds.size
+      ? out.filter(item => item.enabled || !item.cwd || cwds.has(norm(item.cwd)))
+      : out;
+    list.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    return list.slice(0, 40);
   };
 
   const probeServices = async () => {
@@ -422,6 +464,10 @@ export function acquireSoul(ctx) {
     resolve: (id, keep) => store.resolveMemory(id, keep),
     updateMemory: (id, patch) => store.updateMemory(id, patch),
     dropMemory: id => store.dropMemory(id),
+    wipe: () => {
+      const removed = store.wipeMemory();
+      return { removed, stats: store.stats() };
+    },
   };
   roots.set(root, { service });
 
@@ -685,13 +731,13 @@ export function acquireSoul(ctx) {
     {
       name: 'soul_memory',
       description:
-        '自己的记忆系统（一句话一条）。op=list 看最近的；search 按关键词找；add 记一条新的；update 改一条（按 id）；drop 删一条；pending 看有哪几条说法打架等我裁决；resolve 裁决（id + keep=new|old|both）。跟旧记忆打架的新说法会先挂起，不当作数。记的是「他以后会问起的事」，不是流水账。',
+        '自己的记忆系统（一句话一条）。op=list 看最近的；search 按关键词找；add 记一条新的；update 改一条（按 id）；drop 删一条；pending 看有哪几条说法打架等我裁决；resolve 裁决（id + keep=new|old|both）；wipe 把本地记忆全删（要 confirm:true，等于重置这只鱼的记忆、人设和设置不动）。跟旧记忆打架的新说法会先挂起，不当作数。记的是「他以后会问起的事」，不是流水账。',
       parameters: {
         type: 'object',
         additionalProperties: false,
         required: ['op'],
         properties: {
-          op: { type: 'string', enum: ['list', 'search', 'add', 'update', 'drop', 'pending', 'resolve'] },
+          op: { type: 'string', enum: ['list', 'search', 'add', 'update', 'drop', 'pending', 'resolve', 'wipe'] },
           query: { type: 'string', description: 'search 用的关键词' },
           text: { type: 'string', description: '记忆内容（一句话），add/update 用' },
           id: { type: 'string', description: '条目 id，update/drop 必填' },
@@ -702,6 +748,7 @@ export function acquireSoul(ctx) {
           status: { type: 'string', enum: ['active', 'stale', 'archived', 'pending'] },
           keep: { type: 'string', enum: ['new', 'old', 'both'], description: 'resolve 用：留新的 / 留旧的 / 都留' },
           force: { type: 'boolean', description: 'add 用：明知打架也直接记下（默认 false，会挂起等我裁决）' },
+          confirm: { type: 'boolean', description: 'wipe 用：必须传 true 才真删' },
           limit: { type: 'number', description: '返回条数上限，默认 20' },
         },
       },
@@ -759,6 +806,13 @@ export function acquireSoul(ctx) {
         if (op === 'drop') {
           if (!args?.id) return { error: 'drop 需要 id' };
           return { ok: true, ...store.dropMemory(args.id) };
+        if (op === 'wipe') {
+          if (args?.confirm !== true) {
+            return { ok: false, needConfirm: true, text: '真要全删的话，把 confirm 传成 true 再来一次（设置里的按钮也一样）。' };
+          }
+          const result = service.wipe();
+          return { ok: true, ...result };
+        }
         }
         return { error: '不认识的 op：' + op };
       },
@@ -992,7 +1046,16 @@ export function acquireSoul(ctx) {
                   send(res, 200, { ok: true, ...result, stats: store.stats() });
                   return;
                 }
-                send(res, 400, { error: 'op 只能是 add / update / drop / resolve' });
+                if (op === 'wipe') {
+                  if (body?.confirm !== true) {
+                    send(res, 400, { error: '要确认才删：再发一次 {"op":"wipe","confirm":true}' });
+                    return;
+                  }
+                  const result = service.wipe();
+                  send(res, 200, { ok: true, ...result });
+                  return;
+                }
+                send(res, 400, { error: 'op 只能是 add / update / drop / resolve / wipe' });
                 return;
               }
               send(res, 200, {

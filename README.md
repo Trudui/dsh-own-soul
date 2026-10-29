@@ -171,7 +171,7 @@ DSH 设置 → 左侧「自己」：
 - `soul_status` —— 看自己现在的状态（人设、特质、记忆条数、日记数、眼睛、交接卡、数据目录、启用了哪些对话）
 - `soul_diary` —— 列日记 / 读某一天的全文
 - `soul_trait` —— 列出、添加、退休、恢复、删除特质
-- `soul_memory` —— 记忆：`list` / `search` / `add`（打架会返回 `conflict`，加 `force` 强制记） / `update` / `drop` / `pending`（看等裁决的） / `resolve`（`keep=new|old|both`）
+- `soul_memory` —— 记忆：`list` / `search` / `add`（打架会返回 `conflict`，加 `force` 强制记） / `update` / `drop` / `pending`（看等裁决的） / `resolve`（`keep=new|old|both`） / `wipe`（把本地记忆全删，要 `confirm:true`；人设和设置不动）
 - `soul_session` —— 启用的对话：`current`（勾这个对话）/ `list` / `add <id>` / `remove <id>`
 - `soul_see` —— 用眼睛看一张图：本地路径或 http(s) 链接，可带一句 `question`，返回看到的描述；看不了只回一句原因
 - `soul_recall` —— 翻自己的流水原文：按关键词找「他当时怎么说的、我怎么答的」，返回日期 + 片段。上下文被折叠掉之后用它把细节捞回来（记忆库只有一句话摘要，这里拿得到原话）
@@ -193,6 +193,10 @@ $DSH_HOME/own-soul/<profileKey>/
 ```
 
 改了设置或者觉得长歪了：删 `traits.json` 就回到只有地基的状态；从 `snapshots/` 里挑一份拷回去就能回滚。
+
+想彻底重来：设置面板最下面有个「清空全部本地记忆」（点两次才真删），会清掉流水、日记、印象、记得的事、接续卡、快照，**人设和设置留着**——等于让她忘掉一切、但还叫这个名字。
+
+「在哪些对话里启用」列表只显示**当前工作区**里的对话：先看现在有谁在跑（`agents.list`），没有活的就退回最近动过的那个会话所在目录；已经在白名单里的照样显示，不然勾了却看不见、取消不掉。
 
 ## 从 meow-memory 搬过来
 

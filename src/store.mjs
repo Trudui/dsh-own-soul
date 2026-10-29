@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, appendFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, renameSync, appendFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_RULES, normalizeRules } from './rules.mjs';
@@ -125,6 +125,37 @@ export class SoulStore {
     this.diaryDir = join(dir, 'diary');
     this.handoffDir = join(dir, 'handoff');
     this.snapshotDir = join(dir, 'snapshots');
+  }
+
+  // 把「记忆」删干净：流水、日记、印象、记得的事、接续卡、快照。
+  // 保留 state.json —— 人设、白名单、规则这些是设置不是记忆，删了等于把鱼扔了。
+  wipeMemory() {
+    const count = (dir) => {
+      try {
+        return readdirSync(dir).length;
+      } catch {
+        return 0;
+      }
+    };
+    let files = 0;
+    for (const file of [this.memoryFile, this.traitsFile, this.handoffFile]) {
+      if (existsSync(file)) {
+        rmSync(file, { force: true });
+        files += 1;
+      }
+    }
+    const removed = {
+      files,
+      journal: count(this.journalDir),
+      diary: count(this.diaryDir),
+      handoff: count(this.handoffDir),
+      snapshots: count(this.snapshotDir),
+    };
+    for (const dir of [this.journalDir, this.diaryDir, this.handoffDir, this.snapshotDir]) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    this.ensure();
+    return removed;
   }
 
   ensure() {
