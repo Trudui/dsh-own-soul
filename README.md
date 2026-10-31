@@ -221,6 +221,10 @@ dsh plugin --profile desktop add link:D:/BigFatFish/dsh-own-soul
 
 装完重启 DSH，设置里就会出现「自己」。
 
+**宿主版本**：`engines.dsh` 写的是 `>=0.2.1-rc.3 <0.3.0`，所以 0.2.1 这一串 rc（rc.3 / rc.4 / rc.5 …）都能跑。
+如果 DSH 升级到 0.3 以上被判定不兼容，会打印 `is incompatible with dsh … requirements {"engines.dsh":…}` 并**跳过整个插件**（这时候你会发现 `soul_*` 工具全没了、`/api/own-soul/state` 变 404）。
+两条路：把上面那个范围往上放宽后重装，或者临时用 `dsh plugin allow-version` 给那个**精确版本**开豁免（豁免是给某个 `包名@版本` + 某个 dsh 版本开的，DSH 一升级就失效，记得回来改范围）。
+
 ## 调试
 
 ```bash
